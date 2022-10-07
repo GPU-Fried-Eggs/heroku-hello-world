@@ -1,0 +1,1 @@
+web: sh -c 'cd /app && exec ./target/release/heroku-hello-world'
