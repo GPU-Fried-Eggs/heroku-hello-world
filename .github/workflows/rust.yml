@@ -38,9 +38,10 @@ jobs:
         cp ./master/index.html ./master/build/index.html
         cp -r ./master/pkg ./master/build/pkg
         rm ./master/build/pkg/.gitignore
-        mkdir -p ./server/public
-        cp -r ./master/build ./server
-        mv ./server/build ./server/public
+        mkdir -p ./server/static
+        cp ./master/index.html ./server/static/index.html
+        cp -r ./master/pkg ./server/static/pkg
+        rm ./server/static/pkg/.gitignore
 
     - name: Push to server
       run: |
