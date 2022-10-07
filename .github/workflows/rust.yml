@@ -1,0 +1,64 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        path: master
+
+    - uses: actions/checkout@v3
+      with:
+        ref: server
+        path: server
+
+    - name: Install
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+    - name: Build
+      run: |
+        cd ./master
+        wasm-pack build -t web
+    
+    - name: Combine
+      run: |
+        mkdir -p ./master/build
+        cp ./master/index.html ./master/build/index.html
+        cp -r ./master/pkg ./master/build/pkg
+        rm ./master/build/pkg/.gitignore
+        mkdir -p ./server/public
+        cp -r ./master/build ./server
+        mv ./server/build ./server/public
+
+    - name: Push to server
+      run: |
+        cd ./server
+        git config user.name "GitHub Actions Bot"
+        git config user.email "<>"
+        git add *
+        git commit -m "ci(build): fetch from master"
+        git push origin server
+
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: page
+        path: ./master/build
+
+    - name: deploy to gh-pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./master/build

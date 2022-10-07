@@ -1,0 +1,6 @@
+# workspace
+/.idea
+
+# build
+/pkg
+/target
