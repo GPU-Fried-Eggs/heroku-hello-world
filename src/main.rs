@@ -17,6 +17,7 @@ fn not_found() -> RawHtml<&'static str> {
 pub async fn rocket() -> Rocket<Build> {
     let default_port = 80;
     let default_address = String::from("127.0.0.1");
+    let default_folder = relative!("static");
 
     // Getting the port provided by heroku or fallbacking to a default port
     let port: u64 = env::var("PORT")
@@ -27,13 +28,19 @@ pub async fn rocket() -> Rocket<Build> {
         .and_then(|address| Ok(address))
         .unwrap_or(default_address.to_string());
 
+    let folder = env::var("STATIC")
+        .and_then(|folder| Ok(folder))
+        .unwrap_or(default_folder.to_string());
+
     println!("Starting the server {} on port {}", address, port);
+
+    println!("Current folder {}", folder);
 
     let config = Config::figment()
         .merge(("port", port))
         .merge(("address", address));
 
     rocket::custom(config)
-        .mount("/", FileServer::from(relative!("static")))
+        .mount("/", FileServer::from(folder))
         .register("/", catchers![not_found])
 }
