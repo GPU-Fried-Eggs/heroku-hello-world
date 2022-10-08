@@ -34,6 +34,7 @@ jobs:
     
     - name: Combine
       run: |
+        rm -rf ./server/static/*
         mkdir -p ./master/build
         cp ./master/index.html ./master/build/index.html
         cp -r ./master/pkg ./master/build/pkg
