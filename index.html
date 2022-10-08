@@ -7,20 +7,33 @@
         import init from "./pkg/hello_world.js";
 
         init().then();
+
+        window.onresize = () => {
+            const canvas = document.querySelector("#container canvas");
+            if (!!canvas) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+        }
     </script>
     <style>
         body {
-            display: flex;
             margin: 0;
             width: 100vw;
             height: 100vh;
-            justify-content: center;
-            align-content: center;
         }
 
         #container {
+            display: flex;
             width: 100%;
             height: 100%;
+            justify-content: center;
+            background-color: lightblue;
+        }
+
+        #container canvas {
+            margin: auto;
+            border-radius: 12px;
         }
     </style>
 </head>
