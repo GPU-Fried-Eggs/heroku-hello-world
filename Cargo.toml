@@ -7,27 +7,23 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-anyhow = "1.0"
-bytemuck = { version = "1.4", features = [ "derive" ] }
+bytemuck = { version = "1.12", features = [ "derive" ] }
 cfg-if = "1"
-env_logger = "0.9"
-js-sys = "0.3.60"
 log = "0.4"
 wgpu = "0.14"
-winit = "0.27.3"
+winit = "0.27"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.9"
 pollster = "0.2"
 
-[dependencies.image]
-version = "0.24"
-default-features = false
-features = ["png", "jpeg"]
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-console_error_panic_hook = "0.1"
 console_log = "0.2"
-wgpu = { version = "0.14.0", features = ["webgl"]}
+console_error_panic_hook = "0.1"
+wgpu = { version = "0.14", features = ["webgl"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Document",
     "Window",
@@ -38,3 +34,7 @@ web-sys = { version = "0.3", features = [
 [profile.release]
 # Tell `rustc` to optimize for small code size.
 opt-level = "s"
+
+[[bin]]
+name = "entrance"
+path = "src/main.rs"

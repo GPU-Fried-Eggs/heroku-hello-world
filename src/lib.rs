@@ -1,10 +1,11 @@
 mod state;
-mod texture;
-mod shader;
-mod time;
 
-use state::State;
-use winit::{event::*, event_loop::{ControlFlow, EventLoop}, window::WindowBuilder};
+use self::state::State;
+use winit::{
+    event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder
+};
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -28,20 +29,17 @@ pub async fn run() {
         use winit::dpi::PhysicalSize;
 
         use winit::platform::web::WindowExtWebSys;
-        web_sys::window()
-            .and_then(|win| win.document())
-            .and_then(|doc| {
-                let dst = doc.get_element_by_id("container")?;
-                window.set_inner_size(PhysicalSize::new(dst.client_width(), dst.client_height()));
-                let canvas = web_sys::Element::from(window.canvas());
-                dst.append_child(&canvas).ok()?;
-                Some(())
-            })
-            .expect("Couldn't append canvas to document body.");
+        web_sys::window().and_then(|win| win.document()).and_then(|doc| {
+            let dst = doc.get_element_by_id("container")?;
+            window.set_inner_size(PhysicalSize::new(dst.client_width(), dst.client_height()));
+            let canvas = web_sys::Element::from(window.canvas());
+            dst.append_child(&canvas).ok()?;
+            Some(())
+        }).expect("Couldn't append canvas to document body.");
     }
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(&window).await;
+    let mut state = State::new(include_str!("./default.wgsl"), &window).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -53,8 +51,7 @@ pub async fn run() {
                     match event {
                         WindowEvent::CloseRequested |
                         WindowEvent::KeyboardInput {
-                            input:
-                            KeyboardInput {
+                            input: KeyboardInput {
                                 state: ElementState::Pressed,
                                 virtual_keycode: Some(VirtualKeyCode::Escape),
                                 ..
@@ -76,11 +73,8 @@ pub async fn run() {
                 state.update();
                 match state.render() {
                     Ok(_) => {}
-                    // Reconfigure the surface if it's lost or outdated
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => state.resize(state.size),
-                    // The system is out of memory, we should probably quit
+                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => state.resize(state.current_size()),
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                    // We're ignoring timeouts
                     Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
                 }
             }
