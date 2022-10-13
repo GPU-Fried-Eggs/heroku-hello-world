@@ -6,6 +6,7 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder
 };
+use winit::event::DeviceEvent::MouseMotion;
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -14,7 +15,7 @@ pub async fn run() {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-            console_log::init_with_level(log::Level::Warn).expect("Could't initialize logger");
+            console_log::init_with_level(log::Level::Warn).expect("Couldn't initialize logger");
         } else {
             env_logger::init();
         }
@@ -42,13 +43,20 @@ pub async fn run() {
     let mut state = State::new(include_str!("./default.wgsl"), &window).await;
 
     event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Poll;
         match event {
+            Event::MainEventsCleared => window.request_redraw(),
+            Event::DeviceEvent {
+                event: MouseMotion{ delta },
+                .. // We're not using device_id currently
+            } => state.handle_mouse_input(delta.0, delta.1),
             Event::WindowEvent {
                 ref event,
                 window_id,
             } if window_id == window.id() => {
-                if !state.input(event) {
+                if !state.handle_input(event) {
                     match event {
+                        #[cfg(not(target_arch="wasm32"))]
                         WindowEvent::CloseRequested |
                         WindowEvent::KeyboardInput {
                             input: KeyboardInput {
@@ -62,7 +70,6 @@ pub async fn run() {
                             state.resize(*physical_size);
                         }
                         WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                            // new_inner_size is &mut so w have to dereference it twice
                             state.resize(**new_inner_size);
                         }
                         _ => {}
@@ -77,10 +84,6 @@ pub async fn run() {
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
                     Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
                 }
-            }
-            Event::MainEventsCleared => {
-                // RedrawRequested will only trigger once, unless we manually request it.
-                window.request_redraw();
             }
             _ => {}
         }

@@ -1,14 +1,17 @@
 mod geometry;
-mod uniforms;
+mod uniform;
 mod time;
+mod camera;
+mod texture;
 
 use std::{borrow::Cow, iter};
-use wgpu::{util::DeviceExt, *};
+use wgpu::*;
 use winit::{dpi::PhysicalSize, event::*, window::Window};
 use time::Instant;
 use self::{
-    geometry::{Vertex, INDICES, VERTICES},
-    uniforms::{bindings::{Uniform, UniformBinding}, MouseUniform, SystemUniform}
+    camera::{Camera, Projection, controller::CameraController},
+    geometry::{Vertex, VertexBinding, quad::{QuadVertex, DrawQuad}},
+    uniform::{Uniform, UniformBinding, system::SystemUniform, camera::CameraUniform}
 };
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
@@ -20,23 +23,26 @@ fn compile_shader(device: &Device, source: &str) -> ShaderModule {
     })
 }
 
-fn create_pipeline(device: &Device, surface_config: &SurfaceConfiguration, render_pipeline_layout: &PipelineLayout, shader: ShaderModule ) -> RenderPipeline {
+fn create_pipeline(device: &Device, layout: &PipelineLayout, color_format: TextureFormat, depth_format: Option<TextureFormat>, vertex_layouts: &[VertexBufferLayout], shader: ShaderModule) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
-        layout: Some(render_pipeline_layout),
+        layout: Some(layout),
         // vertex shader and buffers
         vertex: VertexState {
             module: &shader,
             entry_point: "vs_main",
-            buffers: &[Vertex::desc()],
+            buffers: vertex_layouts,
         },
         // fragment shader and buffers and blending modes
         fragment: Some(FragmentState {
             module: &shader,
             entry_point: "fs_main",
             targets: &[Some(ColorTargetState {
-                format: surface_config.format,
-                blend: Some(BlendState::REPLACE),
+                format: color_format,
+                blend: Some(BlendState {
+                    alpha: BlendComponent::REPLACE,
+                    color: BlendComponent::REPLACE,
+                }),
                 write_mask: ColorWrites::ALL,
             })],
         }),
@@ -46,23 +52,27 @@ fn create_pipeline(device: &Device, surface_config: &SurfaceConfiguration, rende
             strip_index_format: None,
             front_face: FrontFace::Ccw,
             cull_mode: Some(Face::Back),
-            // Setting this to anything other than Fill requires Features::POLYGON_MODE_LINE
-            // or Features::POLYGON_MODE_POINT
+            // Setting this to anything other than Fill requires Features::POLYGON_MODE_LINE or Features::POLYGON_MODE_POINT
             polygon_mode: PolygonMode::Fill,
             // Requires Features::DEPTH_CLIP_CONTROL
             unclipped_depth: false,
             // Requires Features::CONSERVATIVE_RASTERIZATION
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: depth_format.map(|format| DepthStencilState {
+            format,
+            depth_write_enabled: true,
+            depth_compare: CompareFunction::Less,
+            stencil: StencilState::default(),
+            bias: DepthBiasState::default(),
+        }),
         multisample: MultisampleState {
             count: 1,
             mask: !0,
             // No antialiasing
             alpha_to_coverage_enabled: false,
         },
-        // If the pipeline will be used with a multiview render pass, this indicates how
-        // many array layers the attachments will have.
+        // If the pipeline will be used with a multiview render pass, this indicates how many array layers the attachments will have.
         multiview: None,
     })
 }
@@ -74,21 +84,25 @@ pub(super) struct State {
     queue: Queue,
     render_pipeline: RenderPipeline,
     render_pipeline_layout: PipelineLayout,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    num_indices: u32,
+    mesh: VertexBinding,
     /* binding */
     size: PhysicalSize<u32>,
-    start_time: Instant,
+    start_render_time: Instant,
+    last_render_time: Instant,
+    mouse_lock: bool,
+    camera: Camera,
+    projection: Projection,
+    camera_controller: CameraController,
     system_uniform: UniformBinding<SystemUniform>,
-    mouse_uniform: UniformBinding<MouseUniform>
+    camera_uniform: UniformBinding<CameraUniform>,
 }
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen)]
 impl State {
     pub(super) async fn new(source: &str, window: &Window) -> Self {
         let size = window.inner_size();
-        let start_time = Instant::now();
+        let start_render_time = Instant::now();
+        let last_render_time = Instant::now();
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = Instance::new(Backends::all());
@@ -103,11 +117,7 @@ impl State {
             &DeviceDescriptor {
                 label: None,
                 features: Features::empty(),
-                limits: if cfg!(target_arch = "wasm32") {
-                    Limits::downlevel_webgl2_defaults()
-                } else {
-                    Limits::default()
-                },
+                limits: if cfg!(target_arch = "wasm32") { Limits::downlevel_webgl2_defaults() } else { Limits::default() },
             },
             None, // Trace path
         ).await.unwrap();
@@ -118,11 +128,11 @@ impl State {
             width: size.width,
             height: size.height,
             present_mode: PresentMode::Fifo,
-            alpha_mode: CompositeAlphaMode::Auto
+            alpha_mode: CompositeAlphaMode::Auto,
         };
         surface.configure(&device, &surface_config);
 
-        // TIME BINDING
+        // SYSTEM BINDING
         let system_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Time Buffer Bind Group Layout"),
             entries: &[BindGroupLayoutEntry {
@@ -136,11 +146,11 @@ impl State {
                 count: None,
             }],
         });
-        let system_uniform = SystemUniform::new(size, start_time).make_binding(&device, &system_bind_group_layout);
+        let system_uniform = SystemUniform::new(size, start_render_time).make_binding(&device, &system_bind_group_layout);
 
-        // MOUSE BINDING
-        let mouse_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Mouse Buffer Bind Group Layout"),
+        // CAMERA BINDING
+        let camera_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Camera Buffer Bind Group Layout"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
                 visibility: ShaderStages::VERTEX_FRAGMENT,
@@ -152,38 +162,32 @@ impl State {
                 count: None,
             }],
         });
-        let mouse_uniform = MouseUniform::new().make_binding(&device, &mouse_bind_group_layout);
+        let camera_uniform = CameraUniform::new().make_binding(&device, &camera_bind_group_layout);
 
         let shader = compile_shader(&device, source);
         let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&system_bind_group_layout, &mouse_bind_group_layout],
+            bind_group_layouts: &[&system_bind_group_layout, &camera_bind_group_layout],
             push_constant_ranges: &[],
         });
-        let render_pipeline = create_pipeline(&device, &surface_config, &render_pipeline_layout, shader);
+        let render_pipeline = create_pipeline(&device, &render_pipeline_layout, surface_config.format, None, &[QuadVertex::desc()], shader);
 
-        let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
-            usage: BufferUsages::INDEX,
-        });
-        let num_indices = INDICES.len() as u32;
+        let mesh = QuadVertex::new().make_binding(&device);
+
+        let camera = Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
+        let projection = Projection::new(size.width, size.height, cgmath::Deg(45.0), 0.1, 100.0);
+        let camera_controller = CameraController::new(4.0, 0.4);
 
         Self {
             surface, device, queue, surface_config, render_pipeline, render_pipeline_layout,
-            vertex_buffer, index_buffer, num_indices,
-
-            start_time, system_uniform, mouse_uniform, size,
+            mesh, size, start_render_time, last_render_time, mouse_lock: false,
+            camera, projection, camera_controller, system_uniform, camera_uniform
         }
     }
 
     pub(super) fn recompile(&mut self, source: &str) {
-        self.render_pipeline = create_pipeline(&self.device, &self.surface_config, &self.render_pipeline_layout, compile_shader(&self.device, source))
+        self.render_pipeline = create_pipeline(&self.device, &self.render_pipeline_layout, self.surface_config.format, None,
+                                               &[QuadVertex::desc()], compile_shader(&self.device, source))
     }
 
     pub(super) fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -199,13 +203,33 @@ impl State {
         self.size
     }
 
-    pub(super) fn input(&mut self, event: &WindowEvent) -> bool {
-        match *event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.mouse_uniform.uniform_mut().update_position(
-                    (position.x / self.size.width as f64) as f32,
-                    (position.y / self.size.height as f64) as f32,
-                );
+    pub(super) fn handle_mouse_input(&mut self, x: f64, y: f64) {
+        if self.mouse_lock {
+            let _ = &self.camera_controller.process_mouse(x, y);
+        }
+    }
+
+    pub(super) fn handle_input(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                KeyboardInput {
+                    virtual_keycode: Some(key),
+                    state,
+                    ..
+                },
+                ..
+            } => self.camera_controller.process_keyboard(*key, *state),
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.camera_controller.process_scroll(delta);
+                true
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state,
+                ..
+            } => {
+                self.mouse_lock = *state == ElementState::Pressed;
                 true
             }
             _ => false,
@@ -213,18 +237,19 @@ impl State {
     }
 
     pub(super) fn update(&mut self) {
-        self.system_uniform.uniform_mut().update(self.size, self.start_time);
+        self.camera_controller.update_camera(&mut self.camera, Instant::now() - self.last_render_time);
+        self.camera_uniform.uniform_mut().update_view_proj(&self.camera, &self.projection);
+        self.system_uniform.uniform_mut().update_system(self.size, self.start_render_time);
         self.queue.write_buffer(self.system_uniform.buffer(), 0, bytemuck::cast_slice(&[*self.system_uniform.uniform()]));
-        self.queue.write_buffer(self.mouse_uniform.buffer(), 0, bytemuck::cast_slice(&[*self.mouse_uniform.uniform()]));
+        self.queue.write_buffer(self.camera_uniform.buffer(), 0, bytemuck::cast_slice(&[*self.camera_uniform.uniform()]));
     }
 
     pub(super) fn render(&mut self) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Render Encoder")
-        });
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Render Encoder") });
 
+        encoder.push_debug_group("rendering passes");
         {
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -241,14 +266,10 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, self.system_uniform.bind_group(), &[]);
-            render_pass.set_bind_group(1, self.mouse_uniform.bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-
-            // drop render pass (which owns a &mut encoder) so it can be .finish()ed
-            //drop(render_pass);
+            render_pass.set_bind_group(1, self.camera_uniform.bind_group(), &[]);
+            render_pass.draw_mesh(&self.mesh);
         }
+        encoder.pop_debug_group();
 
         self.queue.submit(iter::once(encoder.finish()));
         output.present();

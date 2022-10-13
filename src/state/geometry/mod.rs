@@ -1,33 +1,81 @@
-use bytemuck::{Pod, Zeroable};
-use wgpu::{VertexBufferLayout, BufferAddress, vertex_attr_array, VertexAttribute, VertexStepMode};
+pub(super) mod quad;
+pub(super) mod model;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub(super) struct Vertex {
-    position: [f32; 3],
-    uv: [f32; 2],
+use bytemuck::Pod;
+use wgpu::{Buffer, BufferUsages, Device, util::{DeviceExt, BufferInitDescriptor}};
+
+#[derive(Debug)]
+pub(super) struct VertexBinding {
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    num_indices: u32,
 }
 
-// square, a quad's corners
-pub(super) const VERTICES: &[Vertex] = &[
-    Vertex { position: [-1.0, -1.0, 0.0], uv: [0.0, 0.0] }, // Top left
-    Vertex { position: [1.0, -1.0, 0.0], uv: [1.0, 0.0] }, // Top right
-    Vertex { position: [1.0, 1.0, 0.0], uv: [1.0, 1.0] }, // Bottom left
-    Vertex { position: [-1.0, 1.0, 0.0], uv: [0.0, 1.0] }, // Bottom right
-];
+impl VertexBinding {
+    pub(super) fn vertex_buffer(&self) -> &Buffer {
+        &self.vertex_buffer
+    }
 
-// a simple quad shape
-pub(super) const INDICES: &[u16] = &[2, 3, 0, 1, 2, 0];
+    pub(super) fn index_buffer(&self) -> &Buffer {
+        &self.index_buffer
+    }
 
-impl Vertex {
-    const ATTRIBS: [VertexAttribute; 2] = vertex_attr_array![0 => Float32x3, 1 => Float32x2];
+    pub(super) fn num_indices(&self) -> u32 {
+        self.num_indices
+    }
+}
 
-    pub(super) fn desc<'pipeline>() -> VertexBufferLayout<'pipeline> {
-        use std::mem;
-        VertexBufferLayout {
-            array_stride: mem::size_of::<Vertex>() as BufferAddress,
-            step_mode: VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
+pub(super) trait Vertex {
+    fn get_vertices(&self) -> &'static [u8];
+
+    fn get_indices(&self) -> &'static [u8];
+
+    fn get_indices_number(&self) -> u32;
+
+    fn make_binding(self, device: &Device) -> VertexBinding where Self: Sized + Pod {
+        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: self.get_vertices(),
+            usage: BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: self.get_indices(),
+            usage: BufferUsages::INDEX,
+        });
+        let num_indices = self.get_indices_number();
+        VertexBinding {
+            vertex_buffer,
+            index_buffer,
+            num_indices
         }
+    }
+}
+
+impl Vertex for quad::QuadVertex {
+    fn get_vertices(&self) -> &'static [u8] {
+        bytemuck::cast_slice(quad::VERTICES)
+    }
+
+    fn get_indices(&self) -> &'static [u8] {
+        bytemuck::cast_slice(quad::INDICES)
+    }
+
+    fn get_indices_number(&self) -> u32 {
+        quad::INDICES.len() as u32
+    }
+}
+
+impl Vertex for model::ModelVertex {
+    fn get_vertices(&self) -> &'static [u8] {
+        todo!()
+    }
+
+    fn get_indices(&self) -> &'static [u8] {
+        todo!()
+    }
+
+    fn get_indices_number(&self) -> u32 {
+        todo!()
     }
 }

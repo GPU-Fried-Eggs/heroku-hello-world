@@ -5,11 +5,12 @@ struct System {
 @group(0) @binding(0)
 var<uniform> system: System;
 
-struct Mouse {
-    position: vec2<f32>
-};
+struct Camera {
+    view_pos: vec4<f32>,
+    view_proj: mat4x4<f32>,
+}
 @group(1) @binding(0)
-var<uniform> mouse: Mouse;
+var<uniform> camera: Camera;
 
 // Vertex shader
 struct VertexInput {
